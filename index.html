@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <script type="module">
+    // Import the functions you need from the SDKs you need
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+    // TODO: Add SDKs for Firebase products that you want to use
+    // https://firebase.google.com/docs/web/setup#available-libraries
+  
+    // Your web app's Firebase configuration
+    const firebaseConfig = {
+      apiKey: "AIzaSyDpXdLFl05RGNS7sh0FEbFAtcM8aWgMVvg",
+      authDomain: "d-othello.firebaseapp.com",
+      projectId: "d-othello",
+      storageBucket: "d-othello.firebasestorage.app",
+      messagingSenderId: "895908988417",
+      appId: "1:895908988417:web:6726542c927ad8d9c36200"
+    };
+  
+    // Initialize Firebase
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+  // グローバルに使えるように
+  window.db = db;
+  window.addKifu = async function (kifuData) {
+    try {
+      await addDoc(collection(db, "kifu"), kifuData);
+      alert("棋譜を保存しました");
+    } catch (e) {
+      console.error("棋譜保存エラー: ", e);
+    }
+  };
+  </script>
+
+  <meta charset="UTF-8" />
+  <title>4x4x4 オセロ</title>
+  <style>
+    body {
+      margin: 0;
+      background-color: #333;
+      font-family: sans-serif;
+      overflow: hidden;
+    }
+
+    #turn-selection {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background-color: white;
+      padding: 30px 40px;
+      border-radius: 16px;
+      text-align: center;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+      z-index: 10;
+    }
+
+    #turn-selection h2 {
+      margin-bottom: 20px;
+      font-size: 20px;
+      font-weight: bold;
+    }
+
+    #turn-selection button {
+      margin: 10px;
+      padding: 10px 20px;
+      font-size: 16px;
+      border-radius: 8px;
+      border: 1px solid #000;
+      cursor: pointer;
+    }
+
+    #black-button {
+      background-color: #eee;
+    }
+
+    #white-button {
+      background-color: white;
+    }
+
+    /* ラベル表示用のCSS */
+    .label {
+      color: white;
+      font-size: 16px;
+      font-weight: bold;
+      background-color: rgba(0, 0, 0, 0.5);
+      padding: 2px 4px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+<!-- 石の数表示 -->
+<div id="stone-count-display" style="position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: black; background: rgba(255,255,255,0.9); padding: 15px 30px; border-radius: 12px; font-size: 24px; font-weight: bold; z-index: 10; min-width: 220px; text-align: center; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);">
+  黒: 0 ／ 白: 0
+</div>
+
+  <!-- 手番選択UI -->
+  <div id="turn-selection">
+    <h2>黒の先手からプレイを開始してください</h2>
+    <button id="black-button">先手（黒）</button>
+  </div>
+
+  <!-- パス用ポップアップ -->
+<div id="pass-popup" style="
+display: none;
+position: absolute;
+top: 0; left: 0;
+width: 100%; height: 100%;
+background: rgba(200,200,200,0.8);
+z-index: 99;
+display: flex;
+justify-content: center;
+align-items: center;
+">
+<div style="
+  background: white;
+  padding: 30px;
+  border-radius: 12px;
+  box-shadow: 0 0 10px rgba(0,0,0,0.3);
+  text-align: center;
+">
+  <p>パスです。OKを押して相手のターンへ進んでください。</p>
+  <button id="pass-ok-button" style="margin-top: 10px;">OK</button>
+</div>
+</div>
+
+
+<!-- ゲーム結果後のUI -->
+<div id="game-end-ui" style="display: none; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px 40px; border-radius: 15px; text-align: center; z-index: 10; min-width: 300px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
+  <p id="game-result-text" style="font-size: 24px; font-weight: bold; margin-bottom: 20px;"></p>
+  <button id="send-kifu-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">棋譜を送信</button>
+  <button id="new-game-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">新しいゲーム</button>
+</div>
+
+
+
+
+<!-- 同意ポップアップ -->
+<div id="consentPopup" class="popup-overlay" style="
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0, 0, 0, 0.7);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 10000;
+">
+  <div class="popup-content" style="
+    background: white;
+    padding: 2rem;
+    border-radius: 1rem;
+    width: 90%;
+    max-width: 500px;
+    max-height: 80vh;      /* 画面高さの80%まで */
+    overflow-y: auto;      /* 縦スクロール許可 */
+    text-align: center;
+    font-size: 1rem;
+    line-height: 1.5;
+  ">
+      <p>このゲームは、2人対戦の3Dオセロです。</p>
+
+    <p>プレイ中に収集されるデータは、以下の4点です：</p>
+    <ul style="text-align: left; display: inline-block;">
+      <li>先手／後手の選択</li>
+      <li>対局中の棋譜</li>
+      <li>勝敗結果</li>
+      <li>最終的な石の数</li>
+    </ul>
+
+    <p>
+      これらのデータは <strong>オセロAIの研究目的のみに使用</strong> し、それ以外の目的には一切使用しません。
+    </p>
+
+    <p style="margin-top: 1.5rem;"><strong>【重要なご案内】</strong></p>
+    <ul style="text-align: left; display: inline-block;">
+      <li><strong>「了承する」ボタンを押した直後に「あなたはパスです」と表示されますが、これはバグです。</strong><br>
+      そのまま「OK」ボタンを押してください。</li><br>
+
+      <li><strong>このゲームでは一度石を置くと取り消しはできません。</strong><br>
+      慎重に操作を行ってください。</li><br>
+
+      <li>オセロ盤を回転させたいときは、<strong>背景などの何も無い部分でドラッグ</strong>してください。<br>
+      盤に触った状態で回転させると石が置かれることがありますのでご注意ください。</li><br>
+      
+      <li>本ゲームでは、<strong>直前に置かれた石が赤い透明な膜で覆われることで強調表示されます。</strong><br>
+      <strong>黒色は茶色</strong>っぽく、<strong>白色はピンク色</strong>っぽく見えます</li>
+
+    </ul>
+
+    <p>
+      上記内容にご同意いただける場合は、以下の「了承する」ボタンを押してゲームを開始してください。
+    </p>
+
+    <button id="consentButton" style="margin-top: 1.5rem; padding: 0.5rem 1.5rem; font-size: 1rem; border: none; background-color: #4caf50; color: white; border-radius: 0.5rem; cursor: pointer;">
+      了承する
+    </button>
+  </div>
+</div>
+
+<script>
+  window.addEventListener('DOMContentLoaded', () => {
+    const popup = document.getElementById('consentPopup');
+    const button = document.getElementById('consentButton');
+    const turnUI = document.getElementById('turn-selection');
+
+    if (turnUI) turnUI.style.display = 'none';
+
+    button.addEventListener('click', () => {
+      popup.style.display = 'none';
+      if (turnUI) turnUI.style.display = 'block';
+      init(); // 同意後にゲーム初期化開始
+    });
+  });
+</script>
+
+  <!-- JavaScript本体 -->
+  <script type="module" src="./main.js"></script>
+
+
+</body>
+</html>
+

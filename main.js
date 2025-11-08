@@ -651,6 +651,7 @@ function updateStoneCountDisplay() {
   const count = countStones();
   const display = document.getElementById('stone-count-display');
   if (display) {
-    display.textContent = `黒: ${count.black} ／ 白: ${count.white}`;
+    display.textContent = `BLACK: ${count.black} ／ WHITE: ${count.white}`;
   }
 }
+

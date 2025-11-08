@@ -34,7 +34,7 @@
   </script>
 
   <meta charset="UTF-8" />
-  <title>4x4x4 オセロ</title>
+  <title>4x4x4 othello</title>
   <style>
     body {
       margin: 0;
@@ -94,13 +94,13 @@
 <body>
 <!-- 石の数表示 -->
 <div id="stone-count-display" style="position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: black; background: rgba(255,255,255,0.9); padding: 15px 30px; border-radius: 12px; font-size: 24px; font-weight: bold; z-index: 10; min-width: 220px; text-align: center; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);">
-  黒: 0 ／ 白: 0
+  BLACK: 0 ／ WHITE: 0
 </div>
 
   <!-- 手番選択UI -->
   <div id="turn-selection">
-    <h2>黒の先手からプレイを開始してください</h2>
-    <button id="black-button">先手（黒）</button>
+    <h2>Please start playing with BLACK turn</h2>
+    <button id="black-button">First player (BLACK)</button>
   </div>
 
   <!-- パス用ポップアップ -->
@@ -122,7 +122,7 @@ align-items: center;
   box-shadow: 0 0 10px rgba(0,0,0,0.3);
   text-align: center;
 ">
-  <p>パスです。OKを押して相手のターンへ進んでください。</p>
+  <p>Pass. Press OK to move to the next turn</p>
   <button id="pass-ok-button" style="margin-top: 10px;">OK</button>
 </div>
 </div>
@@ -131,8 +131,8 @@ align-items: center;
 <!-- ゲーム結果後のUI -->
 <div id="game-end-ui" style="display: none; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px 40px; border-radius: 15px; text-align: center; z-index: 10; min-width: 300px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
   <p id="game-result-text" style="font-size: 24px; font-weight: bold; margin-bottom: 20px;"></p>
-  <button id="send-kifu-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">棋譜を送信</button>
-  <button id="new-game-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">新しいゲーム</button>
+  <button id="send-kifu-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">Send Game Record</button>
+  <button id="new-game-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">New Game</button>
 </div>
 
 
@@ -157,42 +157,41 @@ align-items: center;
     font-size: 1rem;
     line-height: 1.5;
   ">
-      <p>このゲームは、2人対戦の3Dオセロです。</p>
+      <p>This game is a 3D Othello for 2 players.</p>
 
-    <p>プレイ中に収集されるデータは、以下の4点です：</p>
+    <p>The following data will be collected during gameplay：</p>
     <ul style="text-align: left; display: inline-block;">
-      <li>先手／後手の選択</li>
-      <li>対局中の棋譜</li>
-      <li>勝敗結果</li>
-      <li>最終的な石の数</li>
+      <li>Choice of first or second player</li>
+      <li>Game record during the match</li>
+      <li>Match outcome (win/loss)</li>
+      <li>Final number of stones</li>
     </ul>
 
     <p>
-      これらのデータは <strong>オセロAIの研究目的のみに使用</strong> し、それ以外の目的には一切使用しません。
+      This data will be used <strong>solely for Othello AI research purposes</strong> and will not be used for any other purpose.
     </p>
 
-    <p style="margin-top: 1.5rem;"><strong>【重要なご案内】</strong></p>
+    <p style="margin-top: 1.5rem;"><strong>Impotant Notice</strong></p>
     <ul style="text-align: left; display: inline-block;">
-      <li><strong>「了承する」ボタンを押した直後に「あなたはパスです」と表示されますが、これはバグです。</strong><br>
-      そのまま「OK」ボタンを押してください。</li><br>
+     <li><strong>Immediately after pressing the "Agree" button, a message saying "Pass" will appear, but this is a bug.</strong><br>
+  Please just press the "OK" button to continue.</li><br>
 
-      <li><strong>このゲームでは一度石を置くと取り消しはできません。</strong><br>
-      慎重に操作を行ってください。</li><br>
+  <li><strong>Once you place a stone in this game, it cannot be undone.</strong><br>
+  Please act carefully.</li><br>
 
-      <li>オセロ盤を回転させたいときは、<strong>背景などの何も無い部分でドラッグ</strong>してください。<br>
-      盤に触った状態で回転させると石が置かれることがありますのでご注意ください。</li><br>
-      
-      <li>本ゲームでは、<strong>直前に置かれた石が赤い透明な膜で覆われることで強調表示されます。</strong><br>
-      <strong>黒色は茶色</strong>っぽく、<strong>白色はピンク色</strong>っぽく見えます</li>
+  <li>If you want to rotate the Othello board, <strong>drag on an empty area such as the background</strong>.<br>
+  Be careful: rotating while touching the board may accidentally place a stone.</li><br>
+  
+  <li>In this game, <strong>the most recently placed stone is highlighted with a red transparent overlay</strong>.<br>
+  <strong>Black stones appear brownish</strong> and <strong>white stones appear pinkish</strong>.</li>
+</ul>
 
-    </ul>
-
-    <p>
-      上記内容にご同意いただける場合は、以下の「了承する」ボタンを押してゲームを開始してください。
-    </p>
+   <p>
+  If you agree with the above, please press the "Agree" button below to start the game.
+</p>
 
     <button id="consentButton" style="margin-top: 1.5rem; padding: 0.5rem 1.5rem; font-size: 1rem; border: none; background-color: #4caf50; color: white; border-radius: 0.5rem; cursor: pointer;">
-      了承する
+      Agree
     </button>
   </div>
 </div>
@@ -219,4 +218,5 @@ align-items: center;
 
 </body>
 </html>
+
 

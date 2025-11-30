@@ -527,12 +527,12 @@ function showGameResultUI(result) {
   container.style.zIndex = '100';
 
   const text = document.createElement('p');
-  text.textContent = `勝者: ${result.result}（黒: ${result.score.black} - 白: ${result.score.white}）`;
+  text.textContent = `Winner: ${result.result}（BLACK: ${result.score.black} - WHITE: ${result.score.white}）`;
   container.appendChild(text);
 
   // 棋譜送信ボタン
 const sendBtn = document.createElement('button');
-sendBtn.textContent = '棋譜を送信';
+sendBtn.textContent = 'Send Game Record';
 sendBtn.style.margin = '10px';
 
 sendBtn.addEventListener('click', () => {
@@ -540,13 +540,13 @@ sendBtn.addEventListener('click', () => {
   const newRef = push(kifuRef); // ユニークキーを自動生成
   set(newRef, result) // result は棋譜オブジェクト
     .then(() => {
-      alert('棋譜を送信しました！');
+      alert('Sent successfully!');
       container.remove();
       showNewGameButton();
     })
     .catch((error) => {
       console.error("送信エラー:", error);
-      alert("棋譜の送信に失敗しました。");
+      alert("Sending failed");
     });
 });
 
@@ -571,7 +571,7 @@ function showNewGameButton() {
   newGameContainer.style.zIndex = '100';
 
   const restartBtn = document.createElement('button');
-  restartBtn.textContent = '新しいゲーム';
+  restartBtn.textContent = 'New Game';
   restartBtn.addEventListener('click', () => {
     location.reload(); // または任意の初期化処理
   });
@@ -654,4 +654,5 @@ function updateStoneCountDisplay() {
     display.textContent = `BLACK: ${count.black} ／ WHITE: ${count.white}`;
   }
 }
+
 

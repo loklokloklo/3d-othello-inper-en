@@ -1,40 +1,8 @@
 <!DOCTYPE html>
-<html lang="ja">
+<html lang="en">
 <head>
-  <script type="module">
-    // Import the functions you need from the SDKs you need
-    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
-    // TODO: Add SDKs for Firebase products that you want to use
-    // https://firebase.google.com/docs/web/setup#available-libraries
-  
-    // Your web app's Firebase configuration
-    const firebaseConfig = {
-      apiKey: "AIzaSyDpXdLFl05RGNS7sh0FEbFAtcM8aWgMVvg",
-      authDomain: "d-othello.firebaseapp.com",
-      projectId: "d-othello",
-      storageBucket: "d-othello.firebasestorage.app",
-      messagingSenderId: "895908988417",
-      appId: "1:895908988417:web:6726542c927ad8d9c36200"
-    };
-  
-    // Initialize Firebase
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-
-  // グローバルに使えるように
-  window.db = db;
-  window.addKifu = async function (kifuData) {
-    try {
-      await addDoc(collection(db, "kifu"), kifuData);
-      alert("棋譜を保存しました");
-    } catch (e) {
-      console.error("棋譜保存エラー: ", e);
-    }
-  };
-  </script>
-
   <meta charset="UTF-8" />
-  <title>4x4x4 othello</title>
+  <title>4x4x4 Othello</title>
   <style>
     body {
       margin: 0;
@@ -79,7 +47,7 @@
       background-color: white;
     }
 
-    /* ラベル表示用のCSS */
+    /* axis label styling */
     .label {
       color: white;
       font-size: 16px;
@@ -89,134 +57,202 @@
       border-radius: 4px;
       pointer-events: none;
     }
+
+    /* Undo button: hover / active */
+    #undo-button:hover {
+      background: #c03030 !important;
+    }
+    #undo-button:active {
+      transform: scale(0.96);
+    }
+    #pass-undo-button:hover {
+      background: #c03030 !important;
+    }
+
+    /* pass popup hidden by default (ensure display:none applies) */
+    #pass-popup {
+      display: none !important;
+    }
+    #pass-popup.visible {
+      display: flex !important;
+    }
   </style>
 </head>
 <body>
-<!-- 石の数表示 -->
-<div id="stone-count-display" style="position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: black; background: rgba(255,255,255,0.9); padding: 15px 30px; border-radius: 12px; font-size: 24px; font-weight: bold; z-index: 10; min-width: 220px; text-align: center; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);">
-  BLACK: 0 ／ WHITE: 0
-</div>
 
-  <!-- 手番選択UI -->
+  <!-- Stone count display + Undo button -->
+  <div style="
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    z-index: 10;
+  ">
+    <div id="stone-count-display" style="
+      color: black;
+      background: rgba(255,255,255,0.9);
+      padding: 15px 30px;
+      border-radius: 12px;
+      font-size: 24px;
+      font-weight: bold;
+      min-width: 220px;
+      text-align: center;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    ">
+      BLACK: 0 / WHITE: 0
+    </div>
+    <button id="undo-button" style="
+      padding: 15px 18px;
+      background: #e05555;
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 20px;
+      font-weight: bold;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+      transition: background 0.15s, transform 0.1s;
+      white-space: nowrap;
+    ">↩ Undo</button>
+  </div>
+
+  <!-- Turn selection UI -->
   <div id="turn-selection">
-    <h2>Please start playing with BLACK turn</h2>
+    <h2>Please start playing with the BLACK turn</h2>
     <button id="black-button">First player (BLACK)</button>
   </div>
 
-  <!-- パス用ポップアップ -->
-<div id="pass-popup" style="
-display: none;
-position: absolute;
-top: 0; left: 0;
-width: 100%; height: 100%;
-background: rgba(200,200,200,0.8);
-z-index: 99;
-display: flex;
-justify-content: center;
-align-items: center;
-">
-<div style="
-  background: white;
-  padding: 30px;
-  border-radius: 12px;
-  box-shadow: 0 0 10px rgba(0,0,0,0.3);
-  text-align: center;
-">
-  <p>Pass. Press OK to move to the next turn</p>
-  <button id="pass-ok-button" style="margin-top: 10px;">OK</button>
-</div>
-</div>
-
-
-<!-- ゲーム結果後のUI -->
-<div id="game-end-ui" style="display: none; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px 40px; border-radius: 15px; text-align: center; z-index: 10; min-width: 300px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
-  <p id="game-result-text" style="font-size: 24px; font-weight: bold; margin-bottom: 20px;"></p>
-  <button id="send-kifu-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">Send Game Record</button>
-  <button id="new-game-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">New Game</button>
-</div>
-
-
-
-
-<!-- 同意ポップアップ -->
-<div id="consentPopup" class="popup-overlay" style="
-  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-  background: rgba(0, 0, 0, 0.7);
-  display: flex; justify-content: center; align-items: center;
-  z-index: 10000;
-">
-  <div class="popup-content" style="
-    background: white;
-    padding: 2rem;
-    border-radius: 1rem;
-    width: 90%;
-    max-width: 500px;
-    max-height: 80vh;      /* 画面高さの80%まで */
-    overflow-y: auto;      /* 縦スクロール許可 */
-    text-align: center;
-    font-size: 1rem;
-    line-height: 1.5;
+  <!-- Pass popup -->
+  <div id="pass-popup" style="
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(200,200,200,0.8);
+    z-index: 99;
+    justify-content: center;
+    align-items: center;
   ">
+    <div style="
+      background: white;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 0 10px rgba(0,0,0,0.3);
+      text-align: center;
+    ">
+      <p>Pass. Press OK to move to the next turn.</p>
+      <div style="display: flex; justify-content: center; gap: 12px; margin-top: 10px;">
+        <button id="pass-ok-button" style="
+          padding: 8px 20px;
+          font-size: 15px;
+          border-radius: 6px;
+          cursor: pointer;
+        ">OK</button>
+        <button id="pass-undo-button" style="
+          background: #e05555;
+          color: white;
+          border: none;
+          border-radius: 6px;
+          padding: 8px 14px;
+          font-size: 15px;
+          font-weight: bold;
+          cursor: pointer;
+          transition: background 0.15s;
+        ">↩ Undo</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Post-game result UI -->
+  <div id="game-end-ui" style="display: none; position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 30px 40px; border-radius: 15px; text-align: center; z-index: 10; min-width: 300px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);">
+    <p id="game-result-text" style="font-size: 24px; font-weight: bold; margin-bottom: 20px;"></p>
+    <button id="send-kifu-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">Send Game Record</button>
+    <button id="new-game-btn" style="font-size: 18px; padding: 10px 20px; border-radius: 8px; margin: 5px;">New Game</button>
+  </div>
+
+  <!-- Consent popup -->
+  <div id="consentPopup" style="
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex; justify-content: center; align-items: center;
+    z-index: 10000;
+  ">
+    <div style="
+      background: white;
+      padding: 2rem;
+      border-radius: 1rem;
+      width: 90%;
+      max-width: 500px;
+      max-height: 80vh;
+      overflow-y: auto;
+      text-align: center;
+      font-size: 1rem;
+      line-height: 1.5;
+    ">
+
       <p>This game is a 3D Othello for 2 players.</p>
 
-    <p>The following data will be collected during gameplay：</p>
-    <ul style="text-align: left; display: inline-block;">
-      <li>Choice of first or second player</li>
-      <li>Game record during the match</li>
-      <li>Match outcome (win/loss)</li>
-      <li>Final number of stones</li>
-    </ul>
+      <p>Go to the Japanese version here:
+        <a href="https://loklokloklo.github.io/3d-othello-inper-ver/" target="_blank">
+          https://loklokloklo.github.io/3d-othello-inper-ver/
+        </a>
+      </p>
 
-    <p>
-      This data will be used <strong>solely for Othello AI research purposes</strong> and will not be used for any other purpose.
-    </p>
+      <p>The following data will be collected during gameplay:</p>
+      <ul style="text-align: left; display: inline-block;">
+        <li>Choice of first or second player</li>
+        <li>Game record during the match</li>
+        <li>Match outcome (win/loss)</li>
+        <li>Final number of stones</li>
+      </ul>
 
-    <p style="margin-top: 1.5rem;"><strong>Impotant Notice</strong></p>
-    <ul style="text-align: left; display: inline-block;">
-     <li><strong>Immediately after pressing the "Agree" button, a message saying "Pass" will appear, but this is a bug.</strong><br>
-  Please just press the "OK" button to continue.</li><br>
+      <p>
+        This data will be used <strong>solely for Othello AI research purposes</strong> and will not be used for any other purpose.
+      </p>
 
-  <li><strong>Once you place a stone in this game, it cannot be undone.</strong><br>
-  Please act carefully.</li><br>
+      <p style="margin-top: 1.5rem;"><strong>Important Notice</strong></p>
+      <ul style="text-align: left; display: inline-block;">
+        <li><strong>In this game, you can undo your most recent move with the "↩ Undo" button.</strong><br>
+        It can be used as many times as you like.</li><br>
 
-  <li>If you want to rotate the Othello board, <strong>drag on an empty area such as the background</strong>.<br>
-  Be careful: rotating while touching the board may accidentally place a stone.</li><br>
-  
-  <li>In this game, <strong>the most recently placed stone is highlighted with a red transparent overlay</strong>.<br>
-  <strong>Black stones appear brownish</strong> and <strong>white stones appear pinkish</strong>.</li>
-</ul>
+        <li>If you want to rotate the Othello board, <strong>drag on an empty area such as the background</strong>.<br>
+        Be careful: rotating while touching the board may accidentally place a stone.</li><br>
 
-   <p>
-  If you agree with the above, please press the "Agree" button below to start the game.
-</p>
+        <li>In this game, <strong>the most recently placed stone is highlighted with a red transparent overlay</strong>.<br>
+        <strong>Black stones appear brownish</strong> and <strong>white stones appear pinkish</strong>.</li>
+      </ul>
 
-    <button id="consentButton" style="margin-top: 1.5rem; padding: 0.5rem 1.5rem; font-size: 1rem; border: none; background-color: #4caf50; color: white; border-radius: 0.5rem; cursor: pointer;">
-      Agree
-    </button>
+      <p>
+        If you agree with the above, please press the "Agree" button below to start the game.
+      </p>
+
+      <button id="consentButton" style="margin-top: 1.5rem; padding: 0.5rem 1.5rem; font-size: 1rem; border: none; background-color: #4caf50; color: white; border-radius: 0.5rem; cursor: pointer;">
+        Agree
+      </button>
+
+    </div>
   </div>
-</div>
 
-<script>
-  window.addEventListener('DOMContentLoaded', () => {
-    const popup = document.getElementById('consentPopup');
-    const button = document.getElementById('consentButton');
-    const turnUI = document.getElementById('turn-selection');
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      const popup = document.getElementById('consentPopup');
+      const button = document.getElementById('consentButton');
+      const turnUI = document.getElementById('turn-selection');
 
-    if (turnUI) turnUI.style.display = 'none';
+      if (turnUI) turnUI.style.display = 'none';
 
-    button.addEventListener('click', () => {
-      popup.style.display = 'none';
-      if (turnUI) turnUI.style.display = 'block';
-      init(); // 同意後にゲーム初期化開始
+      button.addEventListener('click', () => {
+        popup.style.display = 'none';
+        if (turnUI) turnUI.style.display = 'block';
+        init(); // start the game after consent
+      });
     });
-  });
-</script>
+  </script>
 
-  <!-- JavaScript本体 -->
+  <!-- Main JavaScript -->
   <script type="module" src="./main.js"></script>
-
 
 </body>
 </html>
-
-

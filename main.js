@@ -1,30 +1,67 @@
-// main.js
+// ============================================================
+// 3D Othello (4x4x4) — Human vs Human version (English site)
+//
+// Technologies: JavaScript / Three.js / Firebase Realtime Database
+// Main features:
+//   - 3D board rendering with camera control via OrbitControls
+//   - Legal-move detection and stone flipping in 26 directions (3D)
+//   - Legal-move markers, pass handling, and game-end detection
+//   - Undo (the board is rebuilt by replaying the move history)
+//   - Sends the finished game record to Firebase
+// ============================================================
+
 import * as THREE from './libs/three.module.js';
 import { OrbitControls } from './libs/OrbitControls.js';
-import { CSS2DRenderer, CSS2DObject } from './libs/CSS2DRenderer.js';
+import { CSS2DRenderer } from './libs/CSS2DRenderer.js';
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-app.js";
 import { getDatabase, ref, push, set } from "https://www.gstatic.com/firebasejs/10.10.0/firebase-database.js";
 
 window.init = init;
 
 
+// ============================================================
+// Constants and global state
+// ============================================================
+
+// --- Three.js ---
 let scene, camera, renderer, labelRenderer, controls;
 let boardGroup;
-let currentTurn = 'black'; // current turn ('black' or 'white')
-let gameStarted = 0;
-let board = [];
+
+// --- Game state ---
+let board = [];                 // board[x][y][z] = 'black' | 'white' | null
+let currentTurn = 'black';      // player to move
+let firstPlayer = 'black';      // player who moved first
+let gameStarted = 0;            // 2 while a game is in progress
+let isPassPopupVisible = false; // true while the pass notification is shown
+
+// --- Move records ---
+const moveHistory = [];         // each entry: { player, move } or { player, pass }
+const placedStones = new Set(); // keys "x,y,z" of occupied cells
+let lastPlacedStone = null;     // [x, y, z] of the latest move (for highlighting)
+let lastPlacedColor = null;     // color of the latest move
+
+// --- Stone display ---
+const stoneMap = new Map();     // key "x,y,z" -> stone Mesh
 const stoneRadius = 0.3;
-let lastPlacedStone = null;
-const stoneMap = new Map(); // key = "x,y,z", value = stone Mesh
-const moveHistory = []; // record of each move
-let firstPlayer = 'black';
-let lastPlacedColor = null;
 
-// ========================================
-// Pass popup visibility flag
-// ========================================
-let isPassPopupVisible = false;
+// --- Board dimensions ---
+const size = 4;                 // cells per side
+const spacing = 1.2;            // distance between cell centers
 
+// The 26 neighboring directions in 3D
+// (every combination of dx, dy, dz in {-1, 0, 1} except (0, 0, 0))
+const directions = [];
+for (let dx = -1; dx <= 1; dx++) {
+  for (let dy = -1; dy <= 1; dy++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      if (dx !== 0 || dy !== 0 || dz !== 0) {
+        directions.push([dx, dy, dz]);
+      }
+    }
+  }
+}
+
+// --- Firebase (where game records are stored) ---
 const firebaseConfig = {
   apiKey: "AIzaSyDpXdLFl05RGNS7sh0FEbFAtcM8aWgMVvg",
   authDomain: "d-othello.firebaseapp.com",
@@ -38,29 +75,15 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
 
-const spacing = 1.2;
-const size = 4;
 
-// ========================================
-// BUG FIX: declare placedStones in the global scope
-// (moved outside showAllLegalMoves so it isn't reset on every call)
-// ========================================
-const placedStones = new Set();
-
-const directions = [];
-for (let dx = -1; dx <= 1; dx++) {
-  for (let dy = -1; dy <= 1; dy++) {
-    for (let dz = -1; dz <= 1; dz++) {
-      if (dx !== 0 || dy !== 0 || dz !== 0) {
-        directions.push([dx, dy, dz]);
-      }
-    }
-  }
-}
+// ============================================================
+// Initialization
+// ============================================================
 
 function init() {
+  // Scene, camera, renderer
   scene = new THREE.Scene();
-  scene.background = new THREE.Color('#ccffd0'); // light green background
+  scene.background = new THREE.Color('#ccffd0');
 
   camera = new THREE.PerspectiveCamera(
     45,
@@ -76,6 +99,7 @@ function init() {
   renderer.setClearColor('#ccf2ff');
   document.body.appendChild(renderer.domElement);
 
+  // Renderer for HTML labels (also the element OrbitControls listens on)
   labelRenderer = new CSS2DRenderer();
   labelRenderer.setSize(window.innerWidth, window.innerHeight);
   labelRenderer.domElement.style.position = 'absolute';
@@ -84,20 +108,19 @@ function init() {
 
   controls = new OrbitControls(camera, labelRenderer.domElement);
   controls.enablePan = false;
-  controls.enableZoom = false;
+  controls.enableZoom = true;
   controls.target.set(3, 3, 3);
 
-  // lights
-  const ambientLight = new THREE.AmbientLight(0xffffff, 5);
-  scene.add(ambientLight);
+  // Lights
+  scene.add(new THREE.AmbientLight(0xffffff, 5));
 
   const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
   directionalLight.position.set(10, 10, 10);
   scene.add(directionalLight);
 
-  const axesHelper = new THREE.AxesHelper(10);
-  scene.add(axesHelper);
+  scene.add(new THREE.AxesHelper(10));
 
+  // Start with an empty board
   for (let x = 0; x < size; x++) {
     board[x] = [];
     for (let y = 0; y < size; y++) {
@@ -108,16 +131,27 @@ function init() {
     }
   }
 
-  // build the board
+  createBoardGrid();
+  placeInitialStones();
+  createAxes();
+
+  updateStoneCountDisplay();
+  animate();
+
+  setupUndoButtons();
+}
+
+/** Builds the 4x4x4 grid (an invisible cube plus a wireframe for each cell). */
+function createBoardGrid() {
   boardGroup = new THREE.Group();
   const geometry = new THREE.BoxGeometry(1, 1, 1);
 
+  // The invisible cubes are used for click detection (raycasting)
   const transparentMaterial = new THREE.MeshBasicMaterial({
     color: 0x000000,
     transparent: true,
     opacity: 0
   });
-
   const wireframeMaterial = new THREE.MeshBasicMaterial({
     color: 0xaaaaaa,
     wireframe: true
@@ -126,12 +160,9 @@ function init() {
   for (let x = 0; x < size; x++) {
     for (let y = 0; y < size; y++) {
       for (let z = 0; z < size; z++) {
-        const cube = new THREE.Mesh(geometry, transparentMaterial);
-        const wireframe = new THREE.Mesh(geometry, wireframeMaterial);
-
         const boxGroup = new THREE.Group();
-        boxGroup.add(cube);
-        boxGroup.add(wireframe);
+        boxGroup.add(new THREE.Mesh(geometry, transparentMaterial));
+        boxGroup.add(new THREE.Mesh(geometry, wireframeMaterial));
 
         boxGroup.position.set(
           (x + 1.0) * spacing,
@@ -145,91 +176,59 @@ function init() {
   }
 
   scene.add(boardGroup);
+}
 
-  // initial placement (black = 0x000000, white = 0xffffff)
-  createStone(1, 1, 1, 0x000000);
-  board[1][1][1] = 'black';
-  createStone(2, 2, 1, 0x000000);
-  board[2][2][1] = 'black';
-  createStone(2, 1, 2, 0x000000);
-  board[2][1][2] = 'black';
-  createStone(1, 2, 2, 0x000000);
-  board[1][2][2] = 'black';
+/** Places the initial stones (4 black and 4 white in the central 2x2x2). */
+function placeInitialStones() {
+  const BLACK = 0x000000;
+  const WHITE = 0xffffff;
 
-  createStone(1, 2, 1, 0xffffff);
-  board[1][2][1] = 'white';
-  createStone(2, 2, 2, 0xffffff);
-  board[2][2][2] = 'white';
-  createStone(1, 1, 2, 0xffffff);
-  board[1][1][2] = 'white';
-  createStone(2, 1, 1, 0xffffff);
-  board[2][1][1] = 'white';
+  const blackStones = [[1, 1, 1], [2, 2, 1], [2, 1, 2], [1, 2, 2]];
+  const whiteStones = [[1, 2, 1], [2, 2, 2], [1, 1, 2], [2, 1, 1]];
 
-  // axis length
-  const axisLength = 5;
-
-  const xAxisMaterial = new THREE.LineBasicMaterial({ color: 0xff0000 });
-  const xAxisGeometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(axisLength, 0, 0)
-  ]);
-  const xAxis = new THREE.Line(xAxisGeometry, xAxisMaterial);
-  scene.add(xAxis);
-
-  const yAxisMaterial = new THREE.LineBasicMaterial({ color: 0x00ff00 });
-  const yAxisGeometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, axisLength, 0)
-  ]);
-  const yAxis = new THREE.Line(yAxisGeometry, yAxisMaterial);
-  scene.add(yAxis);
-
-  const zAxisMaterial = new THREE.LineBasicMaterial({ color: 0x0000ff });
-  const zAxisGeometry = new THREE.BufferGeometry().setFromPoints([
-    new THREE.Vector3(0, 0, 0),
-    new THREE.Vector3(0, 0, axisLength)
-  ]);
-  const zAxis = new THREE.Line(zAxisGeometry, zAxisMaterial);
-  scene.add(zAxis);
-
-  // axis labels
-  createAxisLabel('X', (4 + 0.5) * spacing, 0, 0);
-  createAxisLabel('Y', 0, (4 + 0.5) * spacing, 0);
-  createAxisLabel('Z', 0, 0, (4 + 0.5) * spacing);
-
-  updateStoneCountDisplay();
-  animate();
-
-  // ========================================
-  // Undo button event registration
-  // ========================================
-  const undoButton = document.getElementById('undo-button');
-  if (undoButton) {
-    undoButton.addEventListener('click', () => {
-      undoLastMove();
-    });
+  for (const [x, y, z] of blackStones) {
+    createStone(x, y, z, BLACK);
+    board[x][y][z] = 'black';
   }
-
-  // "Undo" button inside the pass popup
-  const passUndoButton = document.getElementById('pass-undo-button');
-  if (passUndoButton) {
-    passUndoButton.addEventListener('click', () => {
-      hidePassPopup();
-      undoCore();
-    });
+  for (const [x, y, z] of whiteStones) {
+    createStone(x, y, z, WHITE);
+    board[x][y][z] = 'white';
   }
 }
 
+/** Draws the X (red), Y (green), and Z (blue) axis lines and their labels. */
+function createAxes() {
+  const axisLength = 5;
+
+  const axisDefs = [
+    { color: 0xff0000, end: new THREE.Vector3(axisLength, 0, 0) }, // X
+    { color: 0x00ff00, end: new THREE.Vector3(0, axisLength, 0) }, // Y
+    { color: 0x0000ff, end: new THREE.Vector3(0, 0, axisLength) }  // Z
+  ];
+
+  for (const { color, end } of axisDefs) {
+    const material = new THREE.LineBasicMaterial({ color });
+    const geometry = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      end
+    ]);
+    scene.add(new THREE.Line(geometry, material));
+  }
+
+  createAxisLabel('X', (4 + 0.5) * spacing, 0, 0);
+  createAxisLabel('Y', 0, (4 + 0.5) * spacing, 0);
+  createAxisLabel('Z', 0, 0, (4 + 0.5) * spacing);
+}
+
+/** Places a sprite showing an axis name (X / Y / Z) at (x, y, z). */
 function createAxisLabel(text, x, y, z) {
   const canvas = document.createElement('canvas');
   canvas.width = 128;
   canvas.height = 128;
   const ctx = canvas.getContext('2d');
 
-  // fully transparent background
+  // Transparent background, black text only
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-  // black text only
   ctx.fillStyle = 'black';
   ctx.font = 'bold 72px sans-serif';
   ctx.textAlign = 'center';
@@ -249,6 +248,7 @@ function createAxisLabel(text, x, y, z) {
   scene.add(sprite);
 }
 
+/** Render loop. */
 function animate() {
   requestAnimationFrame(animate);
   controls.update();
@@ -256,7 +256,29 @@ function animate() {
   labelRenderer.render(scene, camera);
 }
 
-// turn selection screen
+/** Registers the Undo buttons (the normal one and the one in the pass popup). */
+function setupUndoButtons() {
+  const undoButton = document.getElementById('undo-button');
+  if (undoButton) {
+    undoButton.addEventListener('click', () => {
+      undoLastMove();
+    });
+  }
+
+  const passUndoButton = document.getElementById('pass-undo-button');
+  if (passUndoButton) {
+    passUndoButton.addEventListener('click', () => {
+      hidePassPopup();
+      undoCore();
+    });
+  }
+}
+
+
+// ============================================================
+// Starting a game (turn selection screen)
+// ============================================================
+
 const turnUI = document.getElementById('turn-selection');
 const blackButton = document.getElementById('black-button');
 
@@ -270,6 +292,16 @@ if (blackButton && turnUI) {
   });
 }
 
+
+// ============================================================
+// Drawing stones
+// ============================================================
+
+/**
+ * Creates a stone (sphere) and adds it to the scene.
+ * @param {boolean} isLastPlaced If true, draws the stone in a reddish tint
+ *   to mark it as the most recent move.
+ */
 function createStone(x, y, z, color, isLastPlaced = false) {
   let finalColor = color;
 
@@ -287,28 +319,49 @@ function createStone(x, y, z, color, isLastPlaced = false) {
   );
   scene.add(stone);
 
-  const key = `${x},${y},${z}`;
-  stoneMap.set(key, stone);
+  stoneMap.set(`${x},${y},${z}`, stone);
 }
 
+/** Restores the previously highlighted stone to its normal color. */
 function revertPreviousRedStone(color) {
   if (!lastPlacedStone) return;
 
   const [x, y, z] = lastPlacedStone;
-  const key = `${x},${y},${z}`;
-  const mesh = stoneMap.get(key);
+  const mesh = stoneMap.get(`${x},${y},${z}`);
   if (mesh) {
     mesh.material.color.set(color);
   }
 }
 
+/** Removes the stone mesh at the given cell from the scene. */
+function removeStoneAt(x, y, z) {
+  const targetPosition = new THREE.Vector3(
+    (x + 1.0) * spacing,
+    (y + 1.0) * spacing,
+    (z + 1.0) * spacing
+  );
+
+  const toRemove = scene.children.find(obj =>
+    obj instanceof THREE.Mesh &&
+    obj.geometry.type === "SphereGeometry" &&
+    obj.position.distanceTo(targetPosition) < 0.01
+  );
+
+  if (toRemove) {
+    scene.remove(toRemove);
+  }
+}
+
+
+// ============================================================
+// Handling a move (click input)
+// ============================================================
+
 window.addEventListener('pointerdown', (event) => {
   if (gameStarted !== 2) return;
-  // ========================================
-  // BUG FIX: disable clicks while the pass popup is visible
-  // ========================================
-  if (isPassPopupVisible) return;
+  if (isPassPopupVisible) return; // ignore board clicks while the pass popup is open
 
+  // Use raycasting to find which cell was clicked
   const mouse = new THREE.Vector2();
   mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
   mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
@@ -317,59 +370,136 @@ window.addEventListener('pointerdown', (event) => {
   raycaster.setFromCamera(mouse, camera);
 
   const intersects = raycaster.intersectObjects(boardGroup.children, true);
-  if (intersects.length > 0) {
-    const intersect = intersects[0];
-    const point = intersect.object.parent.position;
+  if (intersects.length === 0) return;
 
-    const x = Math.round(point.x / spacing) - 1;
-    const y = Math.round(point.y / spacing) - 1;
-    const z = Math.round(point.z / spacing) - 1;
+  const point = intersects[0].object.parent.position;
+  const x = Math.round(point.x / spacing) - 1;
+  const y = Math.round(point.y / spacing) - 1;
+  const z = Math.round(point.z / spacing) - 1;
 
-    const key = `${x},${y},${z}`;
-    if (placedStones.has(key)) return;
-    if (!isLegalMove(board, x, y, z, currentTurn)) return;
+  const key = `${x},${y},${z}`;
+  if (placedStones.has(key)) return;
+  if (!isLegalMove(board, x, y, z, currentTurn)) return;
 
-    // revert the previously highlighted stone to its normal color first
-    if (lastPlacedStone) {
-      const prevColor = lastPlacedColor === 'black' ? 0x000000 : 0xffffff;
-      revertPreviousRedStone(prevColor);
-    }
+  // Restore the previous highlight to its normal color, then place the new stone
+  if (lastPlacedStone) {
+    const prevColor = lastPlacedColor === 'black' ? 0x000000 : 0xffffff;
+    revertPreviousRedStone(prevColor);
+  }
 
-    const color = currentTurn === 'black' ? 0x000000 : 0xffffff;
-    createStone(x, y, z, color, true);
+  const color = currentTurn === 'black' ? 0x000000 : 0xffffff;
+  createStone(x, y, z, color, true);
 
-    board[x][y][z] = currentTurn;
-    placedStones.add(key);
-    lastPlacedStone = [x, y, z];
-    lastPlacedColor = currentTurn;
+  board[x][y][z] = currentTurn;
+  placedStones.add(key);
+  lastPlacedStone = [x, y, z];
+  lastPlacedColor = currentTurn;
+  moveHistory.push({ player: currentTurn, move: [x, y, z] });
 
-    moveHistory.push({ player: currentTurn, move: [x, y, z] });
+  // Flip before switching turns so the correct color is flipped
+  flipStones(x, y, z, currentTurn);
+  updateStoneCountDisplay();
 
-    // ========================================
-    // BUG FIX: pass turnColor into flipStones (called before the turn switches)
-    // ========================================
-    flipStones(x, y, z, currentTurn);
-    updateStoneCountDisplay();
+  // Switch turns and show the next legal moves
+  currentTurn = currentTurn === 'black' ? 'white' : 'black';
+  showAllLegalMoves();
 
-    // switch turn
-    currentTurn = currentTurn === 'black' ? 'white' : 'black';
-    showAllLegalMoves();
-
-    // pass if the next player has no legal move
-    if (gameStarted === 2) {
-      if (!hasAnyLegalMove(currentTurn)) {
-        const otherPlayer = currentTurn === 'black' ? 'white' : 'black';
-        if (!hasAnyLegalMove(otherPlayer)) {
-          checkGameEnd();
-        } else {
-          showPassPopup();
-        }
-      }
+  // If the next player has no legal move: pass, or end the game
+  if (gameStarted === 2 && !hasAnyLegalMove(currentTurn)) {
+    const otherPlayer = currentTurn === 'black' ? 'white' : 'black';
+    if (!hasAnyLegalMove(otherPlayer)) {
+      checkGameEnd();
+    } else {
+      showPassPopup();
     }
   }
 });
 
 
+// ============================================================
+// Legal-move detection and display
+// ============================================================
+
+/**
+ * Returns whether (x, y, z) is a legal move for currentTurn.
+ * A move is legal if, in at least one of the 26 directions, one or more
+ * opponent stones in a row are followed by one of the player's own stones.
+ */
+function isLegalMove(board, x, y, z, currentTurn) {
+  if (board[x][y][z] !== null) {
+    return false;
+  }
+
+  const opponent = currentTurn === 'black' ? 'white' : 'black';
+
+  for (const [dx, dy, dz] of directions) {
+    let nx = x + dx;
+    let ny = y + dy;
+    let nz = z + dz;
+    let count = 0;
+
+    // Walk along the line while opponent stones continue
+    while (
+      nx >= 0 && nx < 4 &&
+      ny >= 0 && ny < 4 &&
+      nz >= 0 && nz < 4 &&
+      board[nx][ny][nz] === opponent
+    ) {
+      nx += dx;
+      ny += dy;
+      nz += dz;
+      count++;
+    }
+
+    // Legal if at least one opponent stone is capped by the player's own stone
+    if (
+      count > 0 &&
+      nx >= 0 && nx < 4 &&
+      ny >= 0 && ny < 4 &&
+      nz >= 0 && nz < 4 &&
+      board[nx][ny][nz] === currentTurn
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/** Returns whether the given player has at least one legal move. */
+function hasAnyLegalMove(player) {
+  for (let x = 0; x < size; x++) {
+    for (let y = 0; y < size; y++) {
+      for (let z = 0; z < size; z++) {
+        if (isLegalMove(board, x, y, z, player)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Shows every legal move for the current player as a yellow sphere. */
+function showAllLegalMoves() {
+  clearLegalMoveMarkers();
+
+  const legalMovesList = [];
+
+  for (let x = 0; x < size; x++) {
+    for (let y = 0; y < size; y++) {
+      for (let z = 0; z < size; z++) {
+        if (isLegalMove(board, x, y, z, currentTurn)) {
+          showLegalMoveIndicator(x, y, z);
+          legalMovesList.push([x, y, z]);
+        }
+      }
+    }
+  }
+
+  // Analysis log for developers (console output)
+  logLegalMovesInfo(legalMovesList, currentTurn);
+}
+
+/** Removes all legal-move markers. */
 function clearLegalMoveMarkers() {
   const toRemove = [];
   scene.traverse(obj => {
@@ -380,39 +510,33 @@ function clearLegalMoveMarkers() {
   toRemove.forEach(obj => scene.remove(obj));
 }
 
+/** Shows one legal-move marker (a small yellow sphere). */
+function showLegalMoveIndicator(x, y, z) {
+  const geometry = new THREE.SphereGeometry(stoneRadius * 0.6, 16, 16);
+  const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
+  const sphere = new THREE.Mesh(geometry, material);
 
-function showAllLegalMoves() {
-  clearLegalMoveMarkers();
+  sphere.userData.isLegalMoveMarker = true;
+  sphere.name = 'legalMoveIndicator';
+  sphere.position.set(
+    (x + 1.0) * spacing,
+    (y + 1.0) * spacing,
+    (z + 1.0) * spacing
+  );
 
-  const legalMovesList = [];
-
-  for (let x = 0; x < 4; x++) {
-    for (let y = 0; y < 4; y++) {
-      for (let z = 0; z < 4; z++) {
-        const legal = isLegalMove(board, x, y, z, currentTurn);
-        if (legal) {
-          showLegalMoveIndicator(x, y, z);
-          legalMovesList.push([x, y, z]);
-        }
-      }
-    }
-  }
-
-  // ========================================
-  // Dev tool: log the number of empty cells adjacent to the stones
-  // that would be flipped by each legal move
-  // ========================================
-  logLegalMovesInfo(legalMovesList, currentTurn);
+  scene.add(sphere);
 }
 
 /**
- * For each legal move, logs to the console the total number of empty
- * cells (26-neighborhood) adjacent to the opponent stones that would
- * be flipped by that move.
+ * [Developer tool] For each legal move, logs to the console the total number
+ * of empty cells adjacent to the opponent stones that the move would flip
+ * (used for position analysis and AI development).
  *
- * The cell being played is never counted as empty.
+ * - Adjacency uses the 26-neighborhood; cells outside the board are ignored
+ * - The cell being played is not counted as empty
+ * - An empty cell next to several flipped stones is counted only once
  *
- * Output format: "(x,y,z):N" for each legal move
+ * Output format: "(x,y,z):N" for each legal move (coordinates are 1-based)
  */
 function logLegalMovesInfo(legalMoves, player) {
   if (legalMoves.length === 0) return;
@@ -421,6 +545,7 @@ function logLegalMovesInfo(legalMoves, player) {
   const results = [];
 
   for (const [mx, my, mz] of legalMoves) {
+    // Collect the opponent stones this move would flip
     const flippedStones = [];
 
     for (const [dx, dy, dz] of directions) {
@@ -441,6 +566,7 @@ function logLegalMovesInfo(legalMoves, player) {
         nz += dz;
       }
 
+      // If the line ends at the player's own stone, these stones get flipped
       if (
         line.length > 0 &&
         nx >= 0 && nx < size &&
@@ -452,6 +578,7 @@ function logLegalMovesInfo(legalMoves, player) {
       }
     }
 
+    // Count the empty cells adjacent to the flipped stones, without duplicates
     const emptySet = new Set();
     for (const [fx, fy, fz] of flippedStones) {
       for (const [dx, dy, dz] of directions) {
@@ -469,77 +596,24 @@ function logLegalMovesInfo(legalMoves, player) {
         }
       }
     }
-    const emptyCount = emptySet.size;
 
-    results.push(`(${mx+1},${my+1},${mz+1}):${emptyCount}`);
+    results.push(`(${mx + 1},${my + 1},${mz + 1}):${emptySet.size}`);
   }
 
   console.log('[Legal moves - adjacent empty cells] ' + results.join('  '));
 }
 
-function isLegalMove(board, x, y, z, currentTurn) {
-  if (board[x][y][z] !== null) {
-    return false;
-  }
 
-  const opponent = currentTurn === 'black' ? 'white' : 'black';
-  let legal = false;
+// ============================================================
+// Flipping stones
+// ============================================================
 
-  for (const [dx, dy, dz] of directions) {
-    let nx = x + dx;
-    let ny = y + dy;
-    let nz = z + dz;
-    let count = 0;
-
-    while (
-      nx >= 0 && nx < 4 &&
-      ny >= 0 && ny < 4 &&
-      nz >= 0 && nz < 4 &&
-      board[nx][ny][nz] === opponent
-    ) {
-      nx += dx;
-      ny += dy;
-      nz += dz;
-      count++;
-    }
-
-    if (
-      count > 0 &&
-      nx >= 0 && nx < 4 &&
-      ny >= 0 && ny < 4 &&
-      nz >= 0 && nz < 4 &&
-      board[nx][ny][nz] === currentTurn
-    ) {
-      legal = true;
-      break;
-    }
-  }
-
-  return legal;
-}
-
-function showLegalMoveIndicator(x, y, z) {
-  const geometry = new THREE.SphereGeometry(stoneRadius * 0.6, 16, 16);
-  const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-  const sphere = new THREE.Mesh(geometry, material);
-
-  sphere.userData.isLegalMoveMarker = true;
-
-  sphere.position.set(
-    (x + 1.0) * spacing,
-    (y + 1.0) * spacing,
-    (z + 1.0) * spacing
-  );
-
-  sphere.name = 'legalMoveIndicator';
-  scene.add(sphere);
-}
-
-// ========================================
-// BUG FIX: added a turnColor argument to flipStones.
-// The old code referenced the global currentTurn with no argument,
-// so calling it after the turn had already switched flipped the wrong color.
-// ========================================
+/**
+ * Applies the flips caused by placing a turnColor stone at (x, y, z),
+ * updating both the board data and the 3D display.
+ * @param {string} turnColor Color of the player who just moved.
+ *   Call this before the turn is switched.
+ */
 function flipStones(x, y, z, turnColor) {
   const opponent = turnColor === 'black' ? 'white' : 'black';
   let flipped = false;
@@ -563,6 +637,7 @@ function flipStones(x, y, z, turnColor) {
       nz += dz;
     }
 
+    // If the line is capped by the player's own stone, flip everything in between
     if (
       stonesToFlip.length > 0 &&
       nx >= 0 && nx < 4 &&
@@ -585,36 +660,12 @@ function flipStones(x, y, z, turnColor) {
   }
 }
 
-function removeStoneAt(x, y, z) {
-  const targetPosition = new THREE.Vector3(
-    (x + 1.0) * spacing,
-    (y + 1.0) * spacing,
-    (z + 1.0) * spacing
-  );
 
-  const toRemove = scene.children.find(obj =>
-    obj instanceof THREE.Mesh &&
-    obj.geometry.type === "SphereGeometry" &&
-    obj.position.distanceTo(targetPosition) < 0.01
-  );
+// ============================================================
+// Counting and displaying stones
+// ============================================================
 
-  if (toRemove) {
-    scene.remove(toRemove);
-  }
-}
-
-function placeStone(x, y, z) {
-  const color = currentTurn === 'black' ? 0x000000 : 0xffffff;
-
-  createStone(x, y, z, color);
-  board[x][y][z] = currentTurn;
-
-  flipStones(x, y, z, currentTurn);
-
-  currentTurn = currentTurn === 'black' ? 'white' : 'black';
-  showAllLegalMoves();
-}
-
+/** Counts the black and white stones on the board. */
 function countStones() {
   let black = 0;
   let white = 0;
@@ -629,19 +680,98 @@ function countStones() {
   return { black, white };
 }
 
+/** Updates the on-screen stone count. */
+function updateStoneCountDisplay() {
+  const count = countStones();
+  const display = document.getElementById('stone-count-display');
+  if (display) {
+    display.textContent = `BLACK: ${count.black} / WHITE: ${count.white}`;
+  }
+}
+
+
+// ============================================================
+// Handling passes
+// ============================================================
+
+/**
+ * Shows the pass notification popup.
+ * #pass-popup is styled in CSS with `display: none !important`, so it is
+ * shown by toggling the 'visible' class rather than setting style.display.
+ */
+function showPassPopup() {
+  if (gameStarted !== 2) return;
+  isPassPopupVisible = true;
+
+  document.getElementById('pass-popup').classList.add('visible');
+
+  // Disable the normal Undo button while the popup is open
+  const undoBtn = document.getElementById('undo-button');
+  if (undoBtn) undoBtn.disabled = true;
+}
+
+/** Hides the pass notification popup. */
+function hidePassPopup() {
+  document.getElementById('pass-popup').classList.remove('visible');
+  isPassPopupVisible = false;
+
+  const undoBtn = document.getElementById('undo-button');
+  if (undoBtn) undoBtn.disabled = false;
+}
+
+// Confirm the pass (OK button)
+document.getElementById('pass-ok-button').addEventListener('click', () => {
+  hidePassPopup();
+
+  // Record the pass in the history and switch turns
+  moveHistory.push({ player: currentTurn, pass: true });
+  currentTurn = currentTurn === 'black' ? 'white' : 'black';
+  showAllLegalMoves();
+
+  // If neither player has a legal move, the game is over
+  const otherPlayer = currentTurn === 'black' ? 'white' : 'black';
+  if (!hasAnyLegalMove(currentTurn) && !hasAnyLegalMove(otherPlayer)) {
+    checkGameEnd();
+  }
+});
+
+
+// ============================================================
+// Game end and sending the game record
+// ============================================================
+
+/** Determines the winner at the end of the game and shows the result UI. */
+function checkGameEnd() {
+  if (gameStarted !== 2) return;
+
+  const result = countStones();
+  const winner = result.black > result.white ? 'black' :
+    result.white > result.black ? 'white' : 'draw';
+
+  // Convert the history to the stored format (coordinates are 1-based)
+  const formattedMoves = moveHistory.map((entry, i) => {
+    if (entry.pass) {
+      return { turn: i + 1, player: entry.player, pass: true };
+    }
+    const [x, y, z] = entry.move;
+    return { turn: i + 1, player: entry.player, x: x + 1, y: y + 1, z: z + 1 };
+  });
+
+  const gameData = {
+    first: firstPlayer,
+    result: winner,
+    score: result,
+    moves: formattedMoves
+  };
+
+  showGameResultUI(gameData);
+}
+
+/** Shows the result and a button to send the game record. */
 function showGameResultUI(result) {
   const container = document.createElement('div');
   container.id = 'game-result-ui';
-  container.style.position = 'absolute';
-  container.style.top = '30%';
-  container.style.left = '50%';
-  container.style.transform = 'translate(-50%, -50%)';
-  container.style.backgroundColor = 'white';
-  container.style.padding = '20px';
-  container.style.borderRadius = '10px';
-  container.style.textAlign = 'center';
-  container.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.3)';
-  container.style.zIndex = '100';
+  applyPopupStyle(container);
 
   const text = document.createElement('p');
   text.textContent = `Winner: ${result.result} (BLACK: ${result.score.black} - WHITE: ${result.score.white})`;
@@ -651,6 +781,7 @@ function showGameResultUI(result) {
   sendBtn.textContent = 'Send Game Record';
   sendBtn.style.margin = '10px';
 
+  // Save the record under a new key in Firebase's "kifu" node
   sendBtn.addEventListener('click', () => {
     const kifuRef = ref(database, "kifu");
     const newRef = push(kifuRef);
@@ -670,19 +801,11 @@ function showGameResultUI(result) {
   document.body.appendChild(container);
 }
 
+/** Shows the "New Game" button (reloads the page when clicked). */
 function showNewGameButton() {
   const newGameContainer = document.createElement('div');
   newGameContainer.id = 'new-game-ui';
-  newGameContainer.style.position = 'absolute';
-  newGameContainer.style.top = '30%';
-  newGameContainer.style.left = '50%';
-  newGameContainer.style.transform = 'translate(-50%, -50%)';
-  newGameContainer.style.backgroundColor = 'white';
-  newGameContainer.style.padding = '20px';
-  newGameContainer.style.borderRadius = '10px';
-  newGameContainer.style.textAlign = 'center';
-  newGameContainer.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.3)';
-  newGameContainer.style.zIndex = '100';
+  applyPopupStyle(newGameContainer);
 
   const restartBtn = document.createElement('button');
   restartBtn.textContent = 'New Game';
@@ -694,99 +817,30 @@ function showNewGameButton() {
   document.body.appendChild(newGameContainer);
 }
 
-
-function checkGameEnd() {
-  if (gameStarted !== 2) return;
-
-  const result = countStones();
-  let winner = result.black > result.white ? 'black' :
-    result.white > result.black ? 'white' : 'draw';
-
-  const formattedMoves = moveHistory.map((entry, i) => {
-    if (entry.pass) {
-      return { turn: i + 1, player: entry.player, pass: true };
-    } else {
-      const [x, y, z] = entry.move;
-      return { turn: i + 1, player: entry.player, x: x + 1, y: y + 1, z: z + 1 };
-    }
-  });
-
-  const gameData = {
-    first: firstPlayer,
-    result: winner,
-    score: result,
-    moves: formattedMoves
-  };
-
-  showGameResultUI(gameData);
-}
-
-function hasAnyLegalMove(player) {
-  for (let x = 0; x < size; x++) {
-    for (let y = 0; y < size; y++) {
-      for (let z = 0; z < size; z++) {
-        if (isLegalMove(board, x, y, z, player)) return true;
-      }
-    }
-  }
-  return false;
-}
-
-function showPassPopup() {
-  if (gameStarted !== 2) return;
-  isPassPopupVisible = true;
-
-  // ========================================
-  // BUG FIX: #pass-popup is defined in CSS as
-  //   display: none !important
-  //   #pass-popup.visible { display: flex !important }
-  // so setting style.display = 'block' loses to !important
-  // and never actually shows. Use classList.add('visible') instead.
-  // ========================================
-  document.getElementById('pass-popup').classList.add('visible');
-
-  const undoBtn = document.getElementById('undo-button');
-  if (undoBtn) undoBtn.disabled = true;
-}
-
-function hidePassPopup() {
-  document.getElementById('pass-popup').classList.remove('visible');
-  isPassPopupVisible = false;
-
-  const undoBtn = document.getElementById('undo-button');
-  if (undoBtn) undoBtn.disabled = false;
-}
-
-document.getElementById('pass-ok-button').addEventListener('click', () => {
-  hidePassPopup();
-
-  moveHistory.push({ player: currentTurn, pass: true });
-
-  currentTurn = currentTurn === 'black' ? 'white' : 'black';
-  showAllLegalMoves();
-
-  if (!hasAnyLegalMove(currentTurn) && !hasAnyLegalMove(currentTurn === 'black' ? 'white' : 'black')) {
-    checkGameEnd();
-  }
-});
-
-
-function updateStoneCountDisplay() {
-  const count = countStones();
-  const display = document.getElementById('stone-count-display');
-  if (display) {
-    display.textContent = `BLACK: ${count.black} / WHITE: ${count.white}`;
-  }
+/** Applies the white popup style, positioned in the upper middle of the screen. */
+function applyPopupStyle(element) {
+  element.style.position = 'absolute';
+  element.style.top = '30%';
+  element.style.left = '50%';
+  element.style.transform = 'translate(-50%, -50%)';
+  element.style.backgroundColor = 'white';
+  element.style.padding = '20px';
+  element.style.borderRadius = '10px';
+  element.style.textAlign = 'center';
+  element.style.boxShadow = '0 0 10px rgba(0, 0, 0, 0.3)';
+  element.style.zIndex = '100';
 }
 
 
-// ========================================
-// Undo feature (for human vs human games)
-// ========================================
+// ============================================================
+// Undo
+//
+// Approach: remove the last entry from the move history, then replay the
+// history from the initial position to rebuild the board. This avoids
+// keeping a separate record of flips and keeps the state consistent.
+// ============================================================
 
-/**
- * Returns a fresh board with the initial 8 stones placed.
- */
+/** Returns a board containing only the 8 initial stones (4 black, 4 white). */
 function buildInitialBoard() {
   const b = [];
   for (let x = 0; x < size; x++) {
@@ -806,10 +860,7 @@ function buildInitialBoard() {
   return b;
 }
 
-/**
- * Applies the flips that result from `player` placing a stone at
- * (x, y, z) on board `b`.
- */
+/** Applies a move and its flips to board data `b` (the 3D display is not updated). */
 function simulateMoveOnBoard(b, x, y, z, player) {
   b[x][y][z] = player;
   const opponent = player === 'black' ? 'white' : 'black';
@@ -846,9 +897,7 @@ function simulateMoveOnBoard(b, x, y, z, player) {
   }
 }
 
-/**
- * Removes every stone mesh from the scene and clears stoneMap.
- */
+/** Removes every stone mesh from the scene and empties stoneMap. */
 function removeAllStones() {
   const toRemove = [];
   scene.traverse(obj => {
@@ -860,9 +909,7 @@ function removeAllStones() {
   stoneMap.clear();
 }
 
-/**
- * Redraws every stone according to the current `board` array.
- */
+/** Redraws every stone to match the current contents of `board`. */
 function redrawAllStones() {
   removeAllStones();
   for (let x = 0; x < size; x++) {
@@ -882,25 +929,23 @@ function redrawAllStones() {
   }
 }
 
-/**
- * Entry point called from the external "#undo-button".
- */
+/** Entry point for the Undo button. Runs only during a game and while no pass popup is open. */
 function undoLastMove() {
   if (gameStarted !== 2) return;
   if (isPassPopupVisible) return;
   undoCore();
 }
 
-/**
- * Core logic for undoing one move.
- */
+/** Core logic for undoing one move. */
 function undoCore() {
   if (moveHistory.length === 0) {
     return;
   }
 
+  // Remove the last entry from the history
   moveHistory.pop();
 
+  // Rebuild the board by replaying the history from the initial position
   const rebuiltBoard = buildInitialBoard();
   for (const entry of moveHistory) {
     if (entry.pass) continue;
@@ -908,6 +953,7 @@ function undoCore() {
     simulateMoveOnBoard(rebuiltBoard, mx, my, mz, entry.player);
   }
 
+  // Overwrite the global board with the rebuilt one
   for (let x = 0; x < size; x++) {
     for (let y = 0; y < size; y++) {
       for (let z = 0; z < size; z++) {
@@ -916,12 +962,14 @@ function undoCore() {
     }
   }
 
+  // Rebuild the set of occupied cells from the history
   placedStones.clear();
   for (const entry of moveHistory) {
     if (entry.pass) continue;
     placedStones.add(`${entry.move[0]},${entry.move[1]},${entry.move[2]}`);
   }
 
+  // Point "last move" at the latest remaining move
   const lastMoveEntry = [...moveHistory].reverse().find(e => !e.pass);
   if (lastMoveEntry) {
     lastPlacedStone = lastMoveEntry.move;
@@ -931,6 +979,8 @@ function undoCore() {
     lastPlacedColor = null;
   }
 
+  // Restore the turn (the first player if no moves remain,
+  // otherwise the opponent of whoever moved last)
   if (moveHistory.length === 0) {
     currentTurn = firstPlayer;
   } else {
@@ -938,8 +988,8 @@ function undoCore() {
     currentTurn = lastEntry.player === 'black' ? 'white' : 'black';
   }
 
+  // Update the 3D display, stone count, and legal-move markers
   redrawAllStones();
   updateStoneCountDisplay();
   showAllLegalMoves();
-
 }

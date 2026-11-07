@@ -108,7 +108,7 @@ function init() {
 
   controls = new OrbitControls(camera, labelRenderer.domElement);
   controls.enablePan = false;
-  controls.enableZoom = true;
+  controls.enableZoom = false;
   controls.target.set(3, 3, 3);
 
   // Lights
@@ -482,21 +482,15 @@ function hasAnyLegalMove(player) {
 function showAllLegalMoves() {
   clearLegalMoveMarkers();
 
-  const legalMovesList = [];
-
   for (let x = 0; x < size; x++) {
     for (let y = 0; y < size; y++) {
       for (let z = 0; z < size; z++) {
         if (isLegalMove(board, x, y, z, currentTurn)) {
           showLegalMoveIndicator(x, y, z);
-          legalMovesList.push([x, y, z]);
         }
       }
     }
   }
-
-  // Analysis log for developers (console output)
-  logLegalMovesInfo(legalMovesList, currentTurn);
 }
 
 /** Removes all legal-move markers. */
@@ -526,83 +520,6 @@ function showLegalMoveIndicator(x, y, z) {
 
   scene.add(sphere);
 }
-
-/**
- * [Developer tool] For each legal move, logs to the console the total number
- * of empty cells adjacent to the opponent stones that the move would flip
- * (used for position analysis and AI development).
- *
- * - Adjacency uses the 26-neighborhood; cells outside the board are ignored
- * - The cell being played is not counted as empty
- * - An empty cell next to several flipped stones is counted only once
- *
- * Output format: "(x,y,z):N" for each legal move (coordinates are 1-based)
- */
-function logLegalMovesInfo(legalMoves, player) {
-  if (legalMoves.length === 0) return;
-
-  const opponent = player === 'black' ? 'white' : 'black';
-  const results = [];
-
-  for (const [mx, my, mz] of legalMoves) {
-    // Collect the opponent stones this move would flip
-    const flippedStones = [];
-
-    for (const [dx, dy, dz] of directions) {
-      const line = [];
-      let nx = mx + dx;
-      let ny = my + dy;
-      let nz = mz + dz;
-
-      while (
-        nx >= 0 && nx < size &&
-        ny >= 0 && ny < size &&
-        nz >= 0 && nz < size &&
-        board[nx][ny][nz] === opponent
-      ) {
-        line.push([nx, ny, nz]);
-        nx += dx;
-        ny += dy;
-        nz += dz;
-      }
-
-      // If the line ends at the player's own stone, these stones get flipped
-      if (
-        line.length > 0 &&
-        nx >= 0 && nx < size &&
-        ny >= 0 && ny < size &&
-        nz >= 0 && nz < size &&
-        board[nx][ny][nz] === player
-      ) {
-        for (const s of line) flippedStones.push(s);
-      }
-    }
-
-    // Count the empty cells adjacent to the flipped stones, without duplicates
-    const emptySet = new Set();
-    for (const [fx, fy, fz] of flippedStones) {
-      for (const [dx, dy, dz] of directions) {
-        const ax = fx + dx;
-        const ay = fy + dy;
-        const az = fz + dz;
-        if (
-          ax >= 0 && ax < size &&
-          ay >= 0 && ay < size &&
-          az >= 0 && az < size &&
-          board[ax][ay][az] === null &&
-          !(ax === mx && ay === my && az === mz)
-        ) {
-          emptySet.add(`${ax},${ay},${az}`);
-        }
-      }
-    }
-
-    results.push(`(${mx + 1},${my + 1},${mz + 1}):${emptySet.size}`);
-  }
-
-  console.log('[Legal moves - adjacent empty cells] ' + results.join('  '));
-}
-
 
 // ============================================================
 // Flipping stones
